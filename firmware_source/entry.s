@@ -39,6 +39,29 @@ _entry:
     b.w sense_hook      @ +0x84  2026-11 (1.0.2.9 only): the sensor loop's reading store (bl 0x600035A8 at 0x6000376C), then the analog mute
     b.w am_unmute       @ +0x88  2026-11 (1.0.2.9 only): the chord start / stop's analog unmute (0x60008D0C / 0x6000920C), only while not muted
     b.w am_hook         @ +0x8C  2026-11 (1.0.3.0 only): the sensor loop's call of 1.0.3.0's own analog mute (bl 0x60003284 at 0x60003834) -> ours
+    b.w row8_case       @ +0x90  2.118 (1.0.3.0 only): the Normal (108) tone's open hi-hat row case in the row player (bl at 0x60007852): ride in some patterns
+    b.w drum_fix        @ +0x94  2.119 (1.0.3.0 only): the drum hit at the fixed level (veneer 0x600187C0 -> here): the instrument's volume
+    b.w drum_vel        @ +0x98  2.119 (1.0.3.0 only): the Normal rhythm's drum hit with a velocity (veneer 0x600187E8 -> here)
+    b.w tempo_hook      @ +0x9C  2.135 (1.0.3.0 only): the sensor loop's call of the stock tempo routine (bl 0x60007554 at 0x60003752) -> ours: skipped while the tempo is frozen
+
+    .text
+    .thumb_func
+    .global row8_case
+@ Called with bl from the row player's Normal-tone case for row 8 (open hi-hat), in place of "movs r4,#11 ... mov.w r9,#1": sets only r4 (the
+@ instrument hit) and r9 (the hi-hat choke flag); the stock case still sets r7 / r6 (r6 = the instrument the keyboard-mode pad rolls follow).
+@ row8_ride() (mod2.c) says whether the pattern playing wants the ride. lr: the row player saved its own at entry.
+row8_case:
+    push    {r0-r3, r12, lr}
+    bl      row8_ride
+    cmp     r0, #0
+    pop     {r0-r3, r12, lr}
+    beq     1f
+    movs    r4, #8                      @ the cymbal instrument (the ride)
+    mov.w   r9, #0                      @ not in the hi-hat choke group: the closed hi-hat does not cut it
+    bx      lr
+1:  movs    r4, #11                     @ stock: the open hi-hat
+    mov.w   r9, #1
+    bx      lr
 
     .text
     .thumb_func
@@ -193,20 +216,20 @@ led_prio:
 
 @ issue #2: the keyboard notes (r1) through kb_note (+ the latched Transpose, CF_KTR), then the stock routine with r0, r2, r3,
 @ the stack argument and lr exactly as the caller set them.
-    .macro KBNOTE name, target
+    .macro KBNOTE name, target, fn=kb_note
     .text
     .thumb_func
     .global \name
 \name:
     push    {r0, r2, r3, lr}
     mov     r0, r1
-    bl      kb_note
+    bl      \fn
     mov     r1, r0
     pop     {r0, r2, r3, lr}
     ldr     ip, =\target
     bx      ip
     .ltorg
     .endm
-    KBNOTE kb_noteon, (FL(600186D8) | 1)
+    KBNOTE kb_noteon, (FL(600186D8) | 1), kb_note_on   @ 2.144: the glide's start
     KBNOTE kb_mon, (FL(600096A0) | 1)
     KBNOTE kb_moff, (FL(600096D4) | 1)

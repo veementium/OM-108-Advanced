@@ -72,7 +72,7 @@ typedef unsigned char u8; typedef signed char s8; typedef unsigned int u32;
 /* ---------------- settings block (the Custom Firmware Tool's choices) ----------------
    64 bytes at CFG (its own 4 KB sector, the last of our code area), written only by the Custom Firmware Tool, read-only
    here: [0..3] CFG_MAGIC, [4] version 1, [5] flags (CF_*), [6] clock / Start / Stop presets (bit 0 = P1 .. bit 4 = P5),
-   [8..17] sub per voice, [18..27] alt sub per voice (voice 0 = Omni 1 unused), [28..37] MIDI parts (the tool's own record:
+   [7] bit 0 = LinnDrum off (CF2_LINNOFF), [8..17] sub per voice, [18..27] alt sub per voice (voice 0 = Omni 1 unused), [28..37] MIDI parts (the tool's own record:
    mod 1's routing table and drum map hold what is used), [60..63] ~CFG_MAGIC. Absent or damaged (blank, a cut write): the
    Suggested Default (every feature on, 2.85's subs and clock presets). The tool writes it last of all. */
 #define CFG        0x60047000u
@@ -87,6 +87,10 @@ typedef unsigned char u8; typedef signed char s8; typedef unsigned int u32;
 #define CLK_DEFAULT 0x18u          /* P4 / P5 (2.82) */
 static int cfg_ok(void) { return R32(CFG) == CFG_MAGIC && R32(CFG + 60u) == ~CFG_MAGIC && R8(CFG + 4u) == 1u; }
 u32 cf(u32 bit) { return (cfg_ok() ? R8(CFG + 5u) : CF_DEFAULT) & bit; }   /* (global: the tests call it) */
+/* 2.132 (owner): [7] bit 0 = the LinnDrum LM-2 kit OFF (the tool's LinnDrum switch, stored inverted so a block from an older tool, [7] = 0, reads as on).
+   Off: the tool writes the stock percussion bank and the stock tom rows; here the 108 patterns' ride and the bossanova conga swap stay stock too. */
+#define CF2_LINNOFF 0x01u
+u32 linn_on(void) { return !(cfg_ok() && (R8(CFG + 7u) & CF2_LINNOFF)); }
 u32 clk_ok(void) {                /* clk_gate: send MIDI clock / Start / Stop in the user's preset (an invalid one = P1, as mod 1) */
     u32 p = R8(RA(20000280)); if (p < 1u || p > 5u) p = 1u;
     return ((cfg_ok() ? R8(CFG + 6u) : CLK_DEFAULT) >> (p - 1u)) & 1u;
@@ -229,7 +233,12 @@ static void set_sub(u32 v, u8 ins) {
         R8(VT + (v+12u)*0x40u + SUB_OFF[v]) = ins; boost_set(v + 12u, v, ins);
     }
 }
-static int alt_on(u32 v) { return v >= 1u && v < NV && R8(VT + v*0x40u + SUB_OFF[v]) == alt(v); }
+#define SQ_XP_ADDR 0x20210000u                          /* seq.h's OCRAM block (SQ_XP) */
+static int alt_on(u32 v) {
+    const volatile u8 *b3 = (const volatile u8 *)(SQ_XP_ADDR + 0x3F0u);   /* 2.127: the banjo slot lent to the third bank: its own alt state, kept aside */
+    if (v == 9u && b3[0] == 0xB3u && b3[1]) return b3[2];
+    return v >= 1u && v < NV && R8(VT + v*0x40u + SUB_OFF[v]) == alt(v);
+}
 static u32 alt_mask(void) { u32 m = 0; for (u32 v = 1; v < NV; v++) if (alt_on(v)) m |= 1u << (v - 1u); return m; }
 static void apply_mask(u32 m) { for (u32 v = 1; v < NV; v++) set_sub(v, (m >> (v - 1u)) & 1u ? alt(v) : nrm(v)); }
 void voice_btn(u32 idx) {               /* replaces bl e7dc at the 5 voice-button sites */
@@ -305,15 +314,23 @@ static void prog_rec(int n, const u8 *rec) {
 /* Append the panel record p (if needp) and the settings record (if needs) at slot next. If they don't fit, erase the
    sector and write both current records again (the settings record only if not at defaults). Interrupts must be off.
    Returns 0 if the erase failed. */
-static int append_recs(const u8 *p, int needp, int needs, int next) {
+static u32 dv_need(int all);                 /* (seq.h) 2.119: the drum-volume records (ver 4) to write, as a mask of parts */
+static void dv_build(u32 part, u8 *r);
+static u32 pt_need(int all);                 /* (seq.h) 2.130: the drum-pattern slots (records ver 5) */
+static void pt_build(u32 part, u8 *r);
+static int append_recs(const u8 *p, int needp, int needs, int next, u32 needv, u32 needt) {
     u8 sr[16]; build_set((volatile u8 *)sr);
-    if (!needp && !needs) return 1;
-    if (next + needp + needs > 256) {
+    if (!needp && !needs && !needv && !needt) return 1;
+    int nv = 0; for (u32 part = 0; part < 5u; part++) nv += (int)((needv >> part) & 1u);
+    for (u32 part = 0; part < 20u; part++) nv += (int)((needt >> part) & 1u);
+    if (next + needp + needs + nv > 256) {
         if (F_ERASE(FLEXSPI, STATE_SECTOR_OFF) != 0) return 0;
-        next = 0; needp = p != 0; needs = !set_default();
+        next = 0; needp = p != 0; needs = !set_default(); needv = dv_need(1); needt = pt_need(1);
     }
     if (needp && p) prog_rec(next++, p);
-    if (needs) prog_rec(next, sr);
+    if (needs) prog_rec(next++, sr);
+    for (u32 part = 0; part < 5u; part++) if ((needv >> part) & 1u) { u8 vr[16]; dv_build(part, vr); prog_rec(next++, vr); }   /* 2.119; 2.123: 5 parts */
+    for (u32 part = 0; part < 20u; part++) if ((needt >> part) & 1u) { u8 vr[16]; pt_build(part, vr); prog_rec(next++, vr); }   /* 2.130: the drum-pattern slots */
     return 1;
 }
 static int set_changed(void) {          /* settings differ from the newest settings record (none: differ from defaults) */
@@ -361,9 +378,11 @@ static void save_state(void) {
         if (same) needp = 0;
     }
     int needs = set_changed();
-    if (!needp && !needs) return;
+    u32 needv = dv_need(0);                   /* 2.119: the drum volumes */
+    u32 needt = pt_need(0);                   /* 2.130: the drum-pattern slots */
+    if (!needp && !needs && !needv && !needt) return;
     __asm volatile ("cpsid i" ::: "memory");
-    append_recs(rec, needp, needs, next);
+    append_recs(rec, needp, needs, next, needv, needt);
     __asm volatile ("cpsie i" ::: "memory");
 }
 /* Replaces bl 0x6000B2C4 at 0x6000F284 (power-on setup). Runs the stock check unchanged; if it requested a
@@ -382,6 +401,7 @@ static void boot_mode(void) {
         const volatile u8 *q = ls >= 0 ? (const volatile u8 *)(STATE_SECTOR + 16u*ls) : (const volatile u8 *)0;
         R8(VMODE) = q ? q[2] : 1u;
         R8(VMODE) = (u8)rvar();              /* old or unknown codes load as vibrato auto */
+        if (R8(VMODE) == 2u || R8(VMODE) == 4u) { R8(VMODE) = 1u; m &= ~1u; }   /* 2.141: the Manual modes are gone: a saved one loads as Note Off */
         s8 x = q ? (s8)q[3] : 0; R8(SPD) = (u8)((x >= -6 && x <= 6) ? x : 0);
         for (u32 i = 0; i < NVAR; i++) {     /* 2.53 per-mode values; an older record: every mode starts from the shared ones */
             u32 d = (m >> 2) & 15u; s8 sp = (s8)R8(SPD);
@@ -649,7 +669,7 @@ static const unsigned short SWELL_MHZ[13] = { 250, 500, 1250, 1250, 1250, 1250, 
 #define ROCK_SLEW    10
 #define TREM_FLOOR_MS 1500
 #define TREM_FULL    35    /* counts above the floor = the full depth setting (vibrato's ROCK_FULL is 25) */
-static int is_rock(u32 var) { return var == 2u || var == 4u; }   /* the manual modes */
+static int is_rock(u32 var) { (void)var; return 0; }   /* 2.144: the Manual modes are gone (never selectable): the compiler drops every branch that only they used */
 static int is_trem(u32 var) { return var >= 3u; }                 /* the tremolo modes */
 /* 2.52 tremolo (modes 3 / 4): the same engine as vibrato auto / manual (gate, hold, finger depth, fades, speed, menus,
    keyboard effect) drives a volume dip instead of a pitch offset. Dip in % of the volume at full depth: TREM_PCT[step].
@@ -880,26 +900,43 @@ static void pb_update(fx_t *F, int on, int c, u32 dt, int vib) {
     if (F->idle < 60000u) F->idle = (unsigned short)(F->idle + dt);
     if (vib && (F->rpn == 1u || (F->rpn == 2u && F->idle >= RPN_IDLE)) && rpn_send()) F->rpn = 0;
 }
+static int gl_cents(void);                          /* 2.144: seq.h: the glide's pitch offset now (1/256 cent) */
+static void gl_note(u32 n);                         /* seq.h: a keyboard note-on (the glide's start) */
+static void vib_pitch(vib_t *v, int pitch, int c, int gl) {   /* the sample tune / analog oscillators: the vibrato's cents c (when pitch) + the glide's gl, 1/256 cent */
+    int ct = (pitch ? c : 0) + gl;
+    if (pitch || gl) {
+        if (!v->active) { v->active = 1; v->base = TUNE16; v->last = v->base; v->de72 = RS8(DE72); }
+        short cur = TUNE16;
+        if (cur != v->last || RS8(DE72) != v->de72) { v->base = cur; v->de72 = RS8(DE72); }   /* master tune changed */
+        int cents = ct >= 0 ? (ct + 128) >> 8 : -((-ct + 128) >> 8);
+        short nv = (short)(v->base + cents);
+        TUNE16 = nv; v->last = nv;
+        if (R8(DE89) <= 1u) an_apply(1, ct);           /* 2.37: analog vibrato only with Omni 1 / Omni 2 (analog main voice) */
+        else an_apply(0, 0);                          /* other voices: the analog chord stays steady (exact base back) */
+    } else if (v->active) {
+        TUNE16 = v->base; v->active = 0;
+        an_apply(0, 0);
+    }
+}
 u32 vib_tick(u32 dea1) {
     vib_t *v = (vib_t *)VB;
     fx_t *F = fx();
-    if (!MODE2()) {                                   /* Note Off mode: nothing of ours runs; undo anything left over */
-        if (v->magic == VMAGIC) {
-            if (v->active) { TUNE16 = v->base; v->active = 0; an_apply(0, 0); }
-            v->x = 0; v->gate = 0; v->hov = 0; v->hcnt = 0; v->off = 0xFFFFu;   /* the next touch in an effect mode starts fresh */
-            v->lf = 0; v->pkr = 0; v->cout = 0; v->ls = 0; v->fast = 0;
-        }
+    if (v->magic != VMAGIC) {                         /* 2.144: set up first (the glide runs in Note Off mode too) */
+        v->tick = TICKS; v->phase = 0; v->x = 0; v->ls = 0; v->rate = 0; v->mgate = 0; v->off = 0xFFFFu;
+        v->hcnt = 0; v->active = 0; v->gate = 0; v->fo = FADE_OUT_MS; v->hov = 0; v->lf = 0;
+        v->home = 0; v->land = 0; v->fast = 0; v->fmin = 0; v->pkr = 0; v->cout = 0;
+        v->magic = VMAGIC;
+    }
+    int gl = gl_cents();
+    if (!MODE2()) {                                   /* Note Off mode: nothing of ours runs (but the glide); undo anything left over */
+        vib_pitch(v, 0, 0, gl);
+        v->x = 0; v->gate = 0; v->hov = 0; v->hcnt = 0; v->off = 0xFFFFu;   /* the next touch in an effect mode starts fresh */
+        v->lf = 0; v->pkr = 0; v->cout = 0; v->ls = 0; v->fast = 0;
         F->gain = 32768u;
         if (F->pb_last != 8192u && pb_send(8192u)) F->pb_last = 8192u;
         return dea1;
     }
     u32 now = TICKS;
-    if (v->magic != VMAGIC) {
-        v->tick = now; v->phase = 0; v->x = 0; v->ls = 0; v->rate = 0; v->mgate = 0; v->off = 0xFFFFu;
-        v->hcnt = 0; v->active = 0; v->gate = 0; v->fo = FADE_OUT_MS; v->hov = 0; v->lf = 0;
-        v->home = 0; v->land = 0; v->fast = 0; v->fmin = 0; v->pkr = 0; v->cout = 0;
-        v->magic = VMAGIC;
-    }
     u32 dt = now - v->tick; v->tick = now;
     if (dt > 50u) dt = 50u;
     int kb = LED(0x15) != 0, menu = menu_on();
@@ -982,19 +1019,7 @@ u32 vib_tick(u32 dea1) {
     int running = gate || v->x > 0, pitch = running && !trem;
     F->gain = (running && trem) ? (u32)(32768 - c * (int)TREM_PCT[depth_idx()] * 4 / 100) : 32768u;
     pb_update(F, pitch && (v->mgate == 0u || v->mgate == MENU_KVIB), c, dt, !trem);
-    if (pitch) {
-        if (!v->active) { v->active = 1; v->base = TUNE16; v->last = v->base; v->de72 = RS8(DE72); }
-        short cur = TUNE16;
-        if (cur != v->last || RS8(DE72) != v->de72) { v->base = cur; v->de72 = RS8(DE72); }   /* master tune changed */
-        int cents = c >= 0 ? (c + 128) >> 8 : -((-c + 128) >> 8);
-        short nv = (short)(v->base + cents);
-        TUNE16 = nv; v->last = nv;
-        if (R8(DE89) <= 1u) an_apply(1, c);           /* 2.37: analog vibrato only with Omni 1 / Omni 2 (analog main voice) */
-        else an_apply(0, 0);                          /* other voices: the analog chord stays steady (exact base back) */
-    } else if (v->active) {
-        TUNE16 = v->base; v->active = 0;
-        an_apply(0, 0);
-    }
+    vib_pitch(v, pitch, c, gl);
     return kb ? dea1 : (dea1 & ~0x40u);
 }
 
@@ -1077,8 +1102,14 @@ static void trem_mix(int *buf) {          /* 2.52: tremolo gain on the strum-voi
     }
     F->gmix = (u32)g1;
 }
+static void flt_mix(int *buf);              /* 2.135: seq.h */
+static void dly_mix(int *buf);              /* 2.137: seq.h */
+static void rvb_mix(int *buf);              /* 2.141: seq.h */
 void mix_tail(void *dst, int *src, u32 n) {
     trem_mix(src);
+    flt_mix(src);                        /* 2.135: keyboard cutoff / resonance (before the spoken prompts) */
+    dly_mix(src);                        /* 2.137: keyboard delay */
+    rvb_mix(src);                        /* 2.141: keyboard reverb */
     prompt_mix(src);
     F_MEMCPY(dst, src, n);
 }
@@ -1146,9 +1177,12 @@ static u32 colbit(u32 k) { return 1u << (R8(KEYBITS + (k % 9u) * 16u + 8u) & 31u
 /* 2.48: the 20 keyboard-mode note keys (key ids 13-35 but 15, 19, 22) */
 #define NOTE_KEYS 0xFFFB76000ull
 #define BLOCK_KEYS (NOTE_KEYS | 0xFF0ull)   /* + the drum pads, keys 4-11 */
-static int block_held(void) {           /* 2.52: any keyboard note or drum pad held (stock key state) */
-    for (u32 k = 4u; k <= 35u; k++) if (((BLOCK_KEYS >> k) & 1ull) && R8(KEY(k) + 4u)) return 1;
-    return 0;
+static u32 sq_arp_cover(void);          /* 2.145: seq.h: the arpeggio is running / the latch is on (it presses note keys itself) */
+static u32 sq_ph_now(void);             /* seq.h: the note keys really held (bit k - 12) */
+static int block_held(void) {           /* 2.52: any keyboard note or drum pad held (stock key state); 2.145: with the arpeggio / latch on, the keys it presses itself are not counted (the real ones are) */
+    u32 cov = sq_arp_cover();
+    for (u32 k = 4u; k <= 35u; k++) if (((BLOCK_KEYS >> k) & 1ull) && R8(KEY(k) + 4u)) { if (cov && ((NOTE_KEYS >> k) & 1ull)) continue; return 1; }
+    return cov && sq_ph_now() ? 1 : 0;
 }
 static int note_held(void) {
     for (u32 k = 13u; k <= 35u; k++) if (((NOTE_KEYS >> k) & 1ull) && R8(KEY(k) + 4u)) return 1;
@@ -1161,8 +1195,10 @@ static int kfx_held(void) { return R8(KEY(15u) + 4u) || R8(KEY(19u) + 4u) || R8(
    note-ons (kb_noteon) and the MIDI note-ons / note-offs (kb_mon / kb_moff, both MIDI channels). The amount is latched
    (ktr) only while no keyboard note is held (control task, before the stock handler), so a note's MIDI note-off always
    matches its note-on when T + Up / Down is pressed while it sounds; the change applies from the next note. */
+static int sq_aoff(u32 note);                  /* (seq.h) the arpeggio's octave offset (0 or 12) of this note's key, set when the arpeggio pressed that key (2.104) */
 static void kt_tick(void) { r27_t *S = r27(); if (!note_held()) S->ktr = cf(CF_KTR) ? RS8(DE79) : 0; }
-u32 kb_note(u32 note) { int n = (int)note + r27()->ktr; return (u32)(n < 0 ? 0 : n > 127 ? 127 : n); }
+u32 kb_note(u32 note) { int n = (int)note + r27()->ktr + sq_aoff(note); return (u32)(n < 0 ? 0 : n > 127 ? 127 : n); }
+u32 kb_note_on(u32 note) { u32 n = kb_note(note); gl_note(n); return n; }   /* 2.144: the keyboard sample note-ons (entry.s kb_noteon): + the glide's start */
 
 /* ---------------- 2.60: 27 mode - PATTERN buttons ----------------
    In 27 mode the six PATTERN buttons (yellow 0x2D = LATIN, 0x28-0x2C = ROCK FOXTROT SLOW-ROCK WALTZ SWING) never reach the
@@ -1353,15 +1389,22 @@ static u32 bank_keys(u32 row, u32 bits) {
     r27_t *S = r27();
     u32 b = colbit(row == 4u ? 0x27u : 0x2Du), m = row == 4u ? 0x20u : 0x40u;      /* vdn: bits 0-4 the voice buttons, 5 / 6 these */
     if (bits & b) {
+        if (!(S->vdn & m) && U->menu == MENU_MODE && R8(KEY(0x35u))) S->vsel = row == 4u ? 6u : 7u;   /* 2.141: the yellow VOICE while Gb 7th is held = Note Off; 2.144: the yellow PATTERN = the arpeggio latch on */
         if ((U->menu && U->menu != MENU_KVIB) || (row == 4u && (R8(KEY(0u)) || R8(KEY(1u))))) S->vdn |= (u8)m;
         if (S->vdn & m) bits &= ~b;
     } else S->vdn &= (u8)~m;
     return bits;
 }
+static u32 sq_jz_get(void);                   /* (after bro_t) the jazz extra combination of the chord now (0 none; 0 without jazz mode) */
+static void sq_jz_set(u32 xt);
+static u32 sq_on(void);                       /* (seq.h) a recorded chord is sounding */
+#include "seq.h"
 u32 row_filter(u32 row, u32 bits) {
     bits |= inj_bits(row);
     if (R8(ST) == PH_EARLY) return bits;  /* 2.78: power-on restore (restore_early): the injected presses only */
+    if (row == 5u && sq_frc()) bits &= ~colbit(0x2Fu);   /* 2.113: recording chords: Manual/Auto is held as Manual, its button hidden */
     if (row == 5u) bits = ma_keys(bits);   /* 2.79 */
+    bits = sq_filter(row, bits);           /* 2.87: chord sequence (KEYBOARD long press, Hold, playback keys) */
     bits = bank_keys(row, bits);          /* the bank buttons, no use in a menu */
     bits = r27_keys(row, bits);           /* 27 mode's PATTERN buttons */
     ui_t *U = (ui_t *)UIB;
@@ -1477,15 +1520,13 @@ static void set_mode(u32 nv) {          /* switch, keeping each mode's own depth
     if (nv) { R8(VMODE) = (u8)nv; R8(MODEV) = (u8)((R8(MODEV) & 0x40u) | 1u | ((u32)R8(PDEP + nv - 1u) << 2)); R8(SPD) = R8(PSPD + nv - 1u); }
     else R8(MODEV) &= (u8)~1u;
 }
-static void mode_say(u32 m) {
-    static const u8 W1[5] = { CL_NOFF, CL_VIB, CL_VIB, CL_TREM, CL_TREM }, W2[5] = { 0xFFu, CL_AUTO, CL_MAN, CL_AUTO, CL_MAN };
-    prompt_req(W1[m], W2[m]);
-}
-static void mode_show(u32 m, int on) {
+/* 2.139: mode_say removed (the mode names are no longer spoken; only "84 mode" / "27 mode" at power-on remain, clips 1, 2, 8) */
+static void mode_show(u32 m, int on) {   /* 2.141 (owner): Note Off = the yellow VOICE's top LED (bit 6), vibrato = VOICE 2 (bit 2), tremolo = VOICE 4 (bit 4); the selected one only when `on` */
+    u32 all = 0x40u | 0x04u | 0x10u, sel = m == 1u ? 0x04u : m == 3u ? 0x10u : 0x40u;
     R8(DE73) = 0u; R8(DE78) = 1u;
-    R8(TRBUF) = on ? (u8)(2u << m) : 0u;                  /* bits 1-5 = the 5 voice LEDs, 6 / 7 = bank LEDs (off) */
+    R8(TRBUF) = (u8)(on ? all : (all & ~sel));            /* bits 1-5 = the 5 voice LEDs, 6 / 7 = the yellow VOICE's two LEDs (top, bottom) */
     F_3A5C(R8(RA(200000F0) + 1u));                          /* voice row (+ the power LED as it is) */
-    u8 pr = LED(0x10) ? 0x80u : 0u;                       /* pattern port: everything off but the Hold LED */
+    u8 pr = (u8)((LED(0x10) ? 0x80u : 0u) | (((const sq_t *)SQB)->lat ? 0x60u : 0x40u));   /* pattern port: the Hold LED, and 2.144 the yellow PATTERN's two LEDs (bits 5 top, 6 bottom): the arpeggio latch, only the bottom one = off, both = on */
     R8(LEDSH + 1u) = pr; F_F518(5u, (u32)(u8)~pr);
 }
 static void mode_begin(mt_t *M) {       /* save the stock display flags (unless a blink already holds them) */
@@ -1541,40 +1582,48 @@ static void ui_tick(void) {
     if (R8(BOOTF) & (BF_P108 | BF_P84 | BF_P27)) {
         if (!R8(DE2C) && R8(KEYS_EN)) {
             if (++U->bootwait > 250u) {
-                prompt_req((R8(BOOTF) & BF_P84) ? CL_84 : (R8(BOOTF) & BF_P27) ? CL_27 : CL_108, CL_MODE);
+                if (R8(BOOTF) & (BF_P84 | BF_P27)) prompt_req((R8(BOOTF) & BF_P84) ? CL_84 : CL_27, CL_MODE);
+                else if (cf(CF_SPOKEN)) F_HIT(14u, 0);   /* 2.122 (owner): 108 mode: the (LinnDrum) snare, at its 108 volume, instead of "108 mode" */
                 R8(BOOTF) &= (u8)~(BF_P108 | BF_P84 | BF_P27);
             }
         }
     }
     par_sync();
     mt_t *M = mt();
-    int dk = R8(KEY(12u) + 4u) != 0, sk = R8(KEY(0x32u) + 4u) != 0, kk = kfx_held();
+    int dk = 0, sk = 0, kk = kfx_held();           /* 2.141: Db / Gb minor no longer open the depth / speed menus (they are the reverb / delay now) */
     if (!kb) {                                   /* left keyboard mode: mode selection / blink end (stock redraws) */
         if (U->menu == MENU_MODE) { U->menu = 0; U->ev = 0; }
         if (M->blink || M->pad) { M->pad = 0; M->blink = 0; F_LEDREST(); }
     }
-    /* Gb 7th (key 0x35): press = mode selection display; release = next mode unless an arrow was used */
+    /* Gb 7th (key 0x35) held = mode selection (2.141, owner): Note Off = the yellow VOICE's top LED, vibrato = VOICE 2, tremolo = VOICE 4, the selected one blinks; the
+       yellow VOICE = Note Off, VOICE 2 / 4 = vibrato / tremolo (VOICE 1, 3, 5: nothing), the arrows step Note Off -> vibrato -> tremolo, both = Note Off. No tap, and no
+       blink when it is let go: the LEDs go straight back. The Manual modes are gone. */
     u8 gb = R8(KEY(0x35u) + 4u) ? 1u : 0u;
     if (gb && !U->gbm && kb && cf(CF_MOD) && !U->menu && !block_held() && !dk && !sk && !kk) {   /* Modulation Modes off: stock */
-        mode_begin(M); U->menu = MENU_MODE; U->ev = 0; U->redraw = 0; M->used = 0;
+        mode_begin(M); U->menu = MENU_MODE; U->ev = 0; U->redraw = 0; M->used = 0; M->ph = 0xFFu; M->t0 = TICKS;
         mode_show(cur_mode(), 1);
     }
     U->gbm = gb;
     if (U->menu == MENU_MODE) {
         u8 ev = U->ev; U->ev = 0;
         r27_t *S7 = r27(); u32 vs = S7->vsel; S7->vsel = 0;
-        if (vs) {                                /* a voice button: that mode, silently (as the arrows) */
-            u32 n = vs - 1u;
-            if (n != cur_mode()) set_mode(n);
-            M->used = 1; mode_show(n, 1); U->redraw = 0;
-        } else if (ev) {
-            u32 c = cur_mode(), n = (ev & EV_BOTH) ? 0u : (ev & EV_UP) ? (c + 1u) % (NVAR + 1u) : (c + NVAR) % (NVAR + 1u);
+        u32 c = cur_mode();
+        if (vs) {
+            u32 n = vs == 6u ? 0u : vs == 2u ? 1u : vs == 4u ? 3u : c;
             if (n != c) set_mode(n);
-            M->used = 1; mode_show(n, 1); U->redraw = 0;
-        } else if (++U->redraw >= 100u) { mode_show(cur_mode(), 1); U->redraw = 0; }
-        if (!gb) {                               /* released */
-            if (!M->used) { u32 n = (cur_mode() + 1u) % (NVAR + 1u); set_mode(n); mode_say(n); }
-            U->menu = 0; U->ev = 0; M->blink = 1; M->t0 = TICKS; M->lock = (u8)(dk || sk); M->ph = 0xFFu;
+            c = n; M->used = 1;
+            if (vs == 7u) ((sq_t *)SQB)->lat ^= 1u;                 /* 2.144 / 2.145: Gb 7th + the yellow PATTERN: the arpeggio latch mode on / off */
+        } else if (ev) {
+            M->used = 1;
+            u32 n = (ev & EV_BOTH) ? 0u : (ev & EV_UP) ? (c == 0u ? 1u : c == 1u ? 3u : 0u) : (c == 0u ? 3u : c == 3u ? 1u : 0u);
+            if (n != c) set_mode(n);
+            c = n;
+        }
+        u32 bp = (TICKS / 250u) & 1u;                           /* the selected one blinks, about 2 Hz */
+        if (vs || ev || bp != M->ph || ++U->redraw >= 100u) { mode_show(c, (int)bp); M->ph = (u8)bp; U->redraw = 0; }
+        if (!gb) {                                              /* released: the LEDs as they were, at once */
+            if (!M->used && ((TICKS - M->t0) & 0xFFFFu) < 500u) { sq_t *SQ = (sq_t *)SQB; SQ->lmk = 0; SQ->lfz = 1u; }   /* 2.145: a short tap on its own lets the latched notes go (the latch mode stays on: the next keys latch again) */
+            U->menu = 0; U->ev = 0; mode_end(M);
         }
     }
     /* 2.78: a panel button pressed during the blink ends it at once, so its own LED shows (the blink owns the voice row) */
@@ -1592,19 +1641,39 @@ static void ui_tick(void) {
     if (M->lock && !dk && !sk) M->lock = 0;
     if ((dk || sk) && (U->menu == MENU_KVIB || (!U->menu && note_held()))) M->lock = 1u;
     u32 want = 0u;
-    if (kb && m2 && U->menu != MENU_MODE) {
+    sq_t *KQ = sq();
+    /* 2.94 (the owner): B minor (key 22) = vibrato, D minor (key 19) = tremolo, both the Auto effect of that name whatever the plate's
+       mode is (the mode is switched for as long as the effect sounds, fade-out included, then put back exactly: VMODE / MODEV / SPD);
+       Bb minor (key 15) = nothing yet (kept for something else). */
+    u32 ke = R8(KEY(22u) + 4u) ? 1u : R8(KEY(19u) + 4u) ? 3u : 0u;
+    if (kb && cf(CF_MOD) && U->menu != MENU_MODE && ke && (U->menu == MENU_KVIB || !U->menu)) {
+        if (!KQ->kact) { par_sync(); KQ->kv = R8(VMODE); KQ->km = R8(MODEV); KQ->ks = R8(SPD); KQ->kact = 1u; }
+        if (R8(VMODE) != ke || !(R8(MODEV) & 1u)) set_mode(ke);
+        want = MENU_KVIB;
+    } else if (kb && m2 && U->menu != MENU_MODE) {
         int man = is_rock(rvar());
         if (U->menu == MENU_DEPTH && dk) want = MENU_DEPTH;
         else if (U->menu == MENU_SPEED && sk) want = MENU_SPEED;
-        else if (U->menu == MENU_KVIB && kk) want = MENU_KVIB;           /* until all three are let go */
-        else if (!U->menu) {
-            if (kk && !man) want = MENU_KVIB;
-            else if ((dk || sk) && !M->lock) want = dk ? MENU_DEPTH : (man ? 0u : MENU_SPEED);
+        else if (!U->menu && (dk || sk) && !M->lock) want = dk ? MENU_DEPTH : (man ? 0u : MENU_SPEED);
+    }
+    /* 2.141 (owner): with B minor (vibrato) or D minor (tremolo) held, the Sustain knob = its depth and the Tempo knob = its speed (13 steps each, as the old menus did), kept
+       per effect and saved with the panel; no test tone. sq_tick locks both knobs when the key goes down (they take over once moved) and freezes the stock tempo meanwhile. */
+    if (ke && kb && cf(CF_MOD) && cf(CF_EXTRAS) && KQ->kact && R8(VMODE) == ke && (R8(MODEV) & 1u)) {
+        const sq_t *SQ = (const sq_t *)SQB;
+        if (SQ->magic == SQMAGIC) {
+            if (((SQ->nst >> 2) & 7u) == 5u && !(SQ->nst & 2u)) R8(MODEV) = (u8)((R8(MODEV) & 0x41u) | (((u32)R8(SQ_SUSV + 2u) * 13u / 128u) << 2));
+            if (((SQ->tst >> 2) & 7u) == 3u && !(SQ->tst & 2u)) R8(SPD) = (u8)(s8)((int)((u32)R8(SQ_SUSV + 5u) * 13u / 128u) - 6);
         }
     }
     if (U->menu != MENU_MODE) {
         if (want && !U->menu) { if (M->blink) mode_end(M); M->slot = R8(VSLOT); menu_enter(U, want); }
         else if (!want && U->menu) menu_close(U, M);
+    }
+    if (KQ->kact && (!kb || (!U->menu && !ke))) {        /* the keyboard effect is over (its fade done) or keyboard mode was left: the mode as it was */
+        const vib_t *V = (const vib_t *)VB;
+        if (!kb || V->magic != VMAGIC || (V->x == 0 && !V->gate && !V->active)) {
+            R8(VMODE) = KQ->kv; R8(MODEV) = KQ->km; R8(SPD) = KQ->ks; KQ->kact = 0;
+        }
     }
     pt_stack(U, M);
     /* 1.3.1 (the owner's report; the stock does it too, on both factory versions): the stock's P release in keyboard mode never
@@ -1839,7 +1908,24 @@ static s8 row27(const r27_t *S, u32 row) {
     u32 b = row == 0u ? B_BD : row == 2u ? B_SD : row == 7u ? B_HH : row == 6u ? B_CY : row == 16u ? B_CL : 0u;
     return (b && (S->hits & b)) ? HIT : -HIT;     /* -80 elsewhere, as the stock patterns (keyboard-mode drum-pad rolls) */
 }
+/* 2.118 (owner): in the Normal (108) tone, the patterns slow rock, swing, bossanova and waltz play the open hi-hat row on the ride (entry.s row8_case, called from
+   the stock row player's Normal-tone case only). DE48 = the pattern the player plays: bank x 5 + button (0 rock 1, 1 rock 2, 2 slow rock, 3 country, 4 swing;
+   7 funk, 8 bossanova, 9 waltz). */
+u32 row8_ride(void) { u32 p = R8(RA(2000DE48)); return p == 2u || p == 4u || p == 8u || p == 9u; }
 void r27_row(u32 row, const volatile s8 *p) {      /* replaces bl 0x60007574 at 0x60007E98 */
+    static const s8 sq_rest = -80;                     /* the stock patterns' rest value (const: this code has no .data) */
+    /* 2.105: the step sequencer's drums are there (keyboard mode): the stock pattern's drum rows rest (the chord row 18 and the bass stay).
+       2.124: only its HITS (a byte > 0) become the rest value; 0 and the pattern's own negative bytes pass as they are. A negative byte is where the stock
+       plays a keyboard-mode roll for a held pad / plate (0x600077A4); 2.105 put -80 on every tick of every row, so a plate held during a sequence
+       repeated its drum at the tick rate, far too fast and off the beat. Now the rolls fall where the pattern puts them, as without the sequencer. */
+    if (row <= 17u && *p > 0 && (sq_dmute() || sq_beatmute())) p = (const volatile s8 *)&sq_rest;
+    /* 2.121: the open hi-hat row's hit (a byte > 0) played as the cymbal row (6: the ride, no hi-hat choke) in the Normal tone's slow rock / swing / bossanova /
+       waltz. 2.118-2.120 patched the row player's case for row 8 instead (bl row8_case at 0x60007852): the Classic tone's row 8 (and the third tone's) jump INTO
+       that case at 0x60007854 after setting their own instrument, onto the second half of the bl: a crash at the first open hi-hat in 84 mode. The stock case
+       is untouched now; its rests (pad rolls) stay on row 8. */
+    if (row == 8u && R8(RA(2000DE65)) == 0u && !r27_ready() && *p > 0 && row8_ride() && linn_on()) row = 6u;   /* 2.132: LinnDrum off: stock */
+    /* 2.123 (owner): bossanova (pattern 8) in the Normal tone: the high and low congas swapped, the toms played as congas too (rows 11 <-> 12, 4 <-> 5) */
+    if (R8(RA(2000DE65)) == 0u && !r27_ready() && R8(RA(2000DE48)) == 8u && linn_on()) row = row == 11u ? 12u : row == 12u ? 11u : row == 4u ? 5u : row == 5u ? 4u : row;
     if (r27_ready()) {
         r27_t *S = (r27_t *)R7B; S->rv = (u8)row27(S, row); p = (const volatile s8 *)&S->rv;
         F_7574(row, p);
@@ -1849,6 +1935,8 @@ void r27_row(u32 row, const volatile s8 *p) {      /* replaces bl 0x60007574 at 
     F_7574(row, p);
 }
 void r27_bass(u32 root, const volatile s8 *p, u32 de42) {   /* replaces bl 0x60007B34 at 0x60007FFE (every mode) */
+    static const s8 sq_bass_rest = 127;                /* the bass code for no note */
+    if (sq_beatmute()) p = (const volatile s8 *)&sq_bass_rest;   /* 2.110: recording chord steps, a rhythm started by a chord press: no bass */
     r27_t *S = (r27_t *)R7B;
     u32 st = bsty(), pk = st && S->magic == R7MAGIC && S->pinit, g0 = R8(DE38), v0 = R8(BVAL);
     if (r27_ready()) {
@@ -1858,6 +1946,9 @@ void r27_bass(u32 root, const volatile s8 *p, u32 de42) {   /* replaces bl 0x600
         S->bv = (u8)v; p = (const volatile s8 *)&S->bv;
     }
     F_7B34(root, p, de42);
+    if (!st && !r27_ready() && R8(RA(2000DE65)) == 0u && R8(DE38) && (!g0 || R8(BVAL) != v0) && sq_on_magic()) {   /* 2.122: a 108 rhythm bass note began: cut in BASS_CUT ms */
+        sq_t *Q = (sq_t *)SQB; Q->bsn = 1u; Q->bst0 = (unsigned short)(TICKS & 0xFFFFu);
+    }
     /* a pluck style holds the gate (no Classic 50 ms cut: the tick only cuts at 0xFA) for the pluck to shape */
     if (st && R8(DE38)) R8(DE34) = 0xFBu;
     if (pk) {
@@ -1959,8 +2050,10 @@ static bro_t *bro(void) {
     }
     return B;
 }
+static u32 sq_jz_get(void) { if (!jazz()) return 0u; const bro_t *B = (const bro_t *)BROB; return B->magic == BROMAGIC ? (u32)(B->xt & 7u) : 0u; }
+static void sq_jz_set(u32 xt) { if (jazz()) bro()->xt = (u8)xt; }
 static u32 m12(int x) { x %= 12; return (u32)(x < 0 ? x + 12 : x); }
-static u32 bro_on(void) { return jazz() && R8(KEYS_EN) && R8(ST) == PH_DONE && !LED(0x15); }
+static u32 bro_on(void) { return jazz() && R8(KEYS_EN) && R8(ST) == PH_DONE && (!LED(0x15) || sq_on()); }   /* 2.94: also in keyboard mode while a recorded chord sounds (its jazz voicing) */
 /* 2.86dev2: per voice (DE89: omni1 omni2 harp celeste A.piano guitar FMpiano organ vibes banjo) what the analog side plays */
 #define VM_OM2 2u   /* Omni 1 / 2: each plate retunes its oscillator to its scale note (an analog line) */
 #define VM_JV  7u   /* 2.86dev5: every other voice (Omni 1 too): jazz voicings, voice-led; the plates strum them */
@@ -2130,7 +2223,25 @@ u32 bass_note(u32 n, u32 q, u32 st) {        /* replaces bl 0x60008E74 (bass pit
     if (B->magic == BROMAGIC) B->bset = (u8)(n > 0xFEu ? 0xFEu : n);
     return F_8E74(n, q, st);
 }
+/* 2.132 (owner): the scale strum (chord mode; KEYBOARD + yellow PATTERN on, KEYBOARD + yellow VOICE off; RAM only): the 13
+   plates play the chord's 7-note scale in order, the middle plate (6) = the chord's root in the octave from C4, one degree
+   per plate down and up. Types (DE49): 0 major, 1 minor, 2 7th, 3 maj7, 4 m7, 5 dim, 6 aug, 7 sus4, 8 sus2. One note per
+   plate (no jazz block). Omni 1 / 2: the analog part still plays the stock chord tones (the plate gates its oscillators). */
+static const u8 SCL[9][7] = { {0,2,4,5,7,9,11}, {0,2,3,5,7,8,10}, {0,2,4,5,7,9,10}, {0,2,4,5,7,9,11}, {0,2,3,5,7,9,10},
+                              {0,1,3,5,6,8,10}, {0,2,4,6,8,9,11}, {0,2,4,5,7,9,10}, {0,2,4,5,7,9,11} };
+static u32 scl_on(void) {
+    const sq_t *Q = (const sq_t *)SQB;
+    return Q->magic == SQMAGIC && (Q->scl & 1u) && cf(CF_EXTRAS) && R8(KEYS_EN) && R8(ST) == PH_DONE && !LED(0x15);
+}
+static void scl_write(void) {                   /* plate value = MIDI - 12 */
+    for (u32 i = 0; i < 13u; i++) {
+        int off = (int)i - 6, oc = off < 0 ? -1 : 0, dg = off - 7 * oc;
+        int v = 48 + (int)rootpc() + SCL[ctype()][dg] + 12 * oc;
+        if (R8(PLATES + 1u + i) != (u8)v) R8(PLATES + 1u + i) = (u8)v;
+    }
+}
 static void plates_write(const bro_t *B, u32 on) {   /* the 13 plate notes: the scale (every voice), or stock */
+    if (scl_on()) { scl_write(); return; }      /* 2.132 */
     (void)B; u32 om = 0;
     u8 c[3] = { (u8)(R8(CLS) % 12u), (u8)(R8(CLS + 1u) % 12u), (u8)(R8(CLS + 2u) % 12u) };
     for (u32 i = 0; i < 13u; i++) {
@@ -2330,6 +2441,7 @@ static void strum_chord(u32 i) {              /* plate i (0-12): its block, top 
 /* A plate touched (replaces bl 0x600186D8 = the strum note-on, in the plate scanner 0x60009B20, at 0x6000A2E4 / 0x6000A47E;
    control task; the scanner calls it only with a chord held). i = plate - 1. */
 u32 plate_on(u32 i, u32 note) {
+    if (i < 13u && scl_on()) { scl_write(); F_NOTEON(i, R8(PLATES + 1u + i)); return 0; }   /* 2.132: the scale strum */
     if (!(jazz() && bro_on() && i < 13u)) { F_NOTEON(i, note); return 0; }
     bro_t *B = bro(); r27_t *S = r27();
     u32 md = vmode();
@@ -2367,6 +2479,12 @@ u32 plate_on(u32 i, u32 note) {
 }
 /* A plate let go (replaces bl 0x60018708 = the strum slot release, in the plate scanner at 0x6000A506 / 0x6000A52E): its
    own slot as the stock, and the 3 extra notes it started (with their MIDI). i = plate - 1. */
+static void scl_tick(void) {                    /* 2.132: the plates follow the scale while it is on; stock again when it goes off */
+    sq_t *Q = (sq_t *)SQB;
+    if (Q->magic != SQMAGIC) return;
+    if (scl_on()) { scl_write(); Q->scy |= 4u; }
+    else if (Q->scy & 4u) { Q->scy &= (u8)~4u; plates_write(0, 0u); }
+}
 u32 plate_off(u32 i) {
     F_REL(i);
     sl_t *L = (sl_t *)SLB;
@@ -2618,12 +2736,15 @@ void c274_wrap(void) {                   /* replaces bl c274 in the control loop
     kb_blink_tick();                     /* 2.65 / 2.80: the keyboard LED blink, any mode */
     pluck_tick();                        /* 2.64 */
     kt_tick();                           /* issue #2 */
-    if (R8(ST) == 0x5A) snapshot();
+    sq_tick();                           /* 2.87: chord sequence */
+    scl_tick();                          /* 2.132: the scale strum's plates */
+    if (R8(ST) == 0x5A && !sq_frc()) snapshot();   /* 2.113: not while recording holds the panel as Manual, Hold off */
     ui_tick();
 #ifdef DIAG
     u32 c1 = CYCCNT; dg_ours(c1 - c0);
 #endif
     F_C274();
+    sq_post();                           /* 2.95: a recorded chord's bass flag, if the stock handler cleared it */
 #ifdef DIAG
     dg_all(CYCCNT - c0);
 #endif
@@ -2699,3 +2820,14 @@ void am_unmute(void) {}
 void sense_hook(u32 ch, u32 x, u32 val) { F_35A8(ch, x, val); }
 void am_hook(void) { am_tick(); }        /* replaces 1.0.3.0's bl 0x60003284 (its own mute) in the sensor loop */
 #endif
+/* 2.135 (owner): the stock tempo routine (0x60007554, called once, from the sensor loop at 0x60003752 with the tempo reading in r0) is skipped while the tempo is frozen
+   (Bb minor held in keyboard mode, and after it until the knob moves: sq_tick sets tfz). 1.0.3.0 only: on 1.0.2.9 nothing calls this. */
+void tempo_hook(u32 raw) {
+#if FW_VERSION == 30
+    const sq_t *Q = (const sq_t *)SQB;
+    if (Q->magic == SQMAGIC && Q->tfz) return;
+    ((void (*)(u32))0x60007555u)(raw);
+#else
+    (void)raw;
+#endif
+}

@@ -5,7 +5,7 @@ set -e
 S=${OM108_STOCKPY:-../lib/stock.py}; [ -f "$S" ] || S=stock.py    # the table: the dev kit's lib/, or next to this file (a copy)
 for v in ${1:-$(python3 $S versions)}; do
   s=; [ "$v" = 29 ] || s=_v$v
-  python3 $S header $v mod2.c entry.s mod1.s mod1_syms.s > stock_v$v.h
+  python3 $S header $v mod2.c seq.h entry.s mod1.s mod1_syms.s > stock_v$v.h
   clang --target=thumbv7em-none-eabi -mcpu=cortex-m7 -mthumb -mfloat-abi=soft -Os -nostdlib -fno-pic -mno-unaligned-access -Wall ${DIAG:+-DDIAG} -include stock_v$v.h -c mod2.c -o mod2$s.o
   clang --target=thumbv7em-none-eabi -mcpu=cortex-m7 -mthumb -x assembler-with-cpp -include stock_v$v.h -c entry.s -o entry$s.o
   ld.lld -T link.ld entry$s.o mod2$s.o -o mod2$s.elf 2>/dev/null

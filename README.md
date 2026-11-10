@@ -1,9 +1,11 @@
 # Suzuki Omnichord OM-108 Custom Firmware Tool
 
 *originally by JohnnyW, modified by Nate Kitsura*
-
-ONLY FOR 1.0.3.0!!! 
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+ONLY FOR 1.0.3.0!!! UNFINISHED AND HEAVILY BUGGED, please wait for the release!
 i need to make a better readme, not all the features are listed.
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️
+
 
 
 ---------------------------------------

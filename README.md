@@ -1,6 +1,12 @@
 # Suzuki Omnichord OM-108 Custom Firmware Tool
 
-*by JohnnyW*
+*originally by JohnnyW, modified by Nate Kitsura*
+
+ONLY FOR 1.0.3.0!!! 
+i need to make a better readme, not all the features are listed.
+
+
+---------------------------------------
 
 A small desktop tool (macOS and Windows) that builds and installs a custom firmware for the **Suzuki Omnichord OM-108**,
 made from **your own unit's original firmware**, with the features and sounds you choose. It can always put the original

@@ -24,7 +24,7 @@ try: import lzma                  # the recipe's compression (format 3); in ever
 except ImportError: lzma = None
 from pathlib import Path
 
-TOOL_VERSION = '1.3.1'
+TOOL_VERSION = '1.3.1-beta.1'
 HERE = Path(__file__).resolve().parent
 UNIT_DIR = HERE.parent / 'my_unit' if HERE.name in ('assets', '.assets') else HERE      # the unit's files (the tool folder's my_unit/)
 SIZE, BOOT_END, FW_END, SECTOR, ERASE_MAX, BASE = 0x1000000, 0x2000, 0xFFE000, 0x1000, 0x8000, 0x60000000
@@ -192,13 +192,23 @@ SUB_NAMES = {1: 'Evolve', 2: 'Mellow Pad', 3: 'Sine Pad', 7: 'Church Bell', 11: 
              18: 'Strings', 19: 'Strings 2', 20: '7th Doo', 21: 'Dah Guys'}
 SWITCHES = ['modulation', 'extras', 'spoken_names', 'drum_map', 'electric_harp', 'better_clap', 'kb_transpose', 'analog_mute']   # settings block bits 0-7
 INVERTED = {'analog_mute'}    # stored as 'off' (mod2.c CF_AMOFF): a block from an older tool (bit 7 = 0) reads as on
+# 2.132 (owner): the Electric Harp and Better Clap options are gone. Their bits stay readable (hidden, never shown) only so a
+# unit that runs an earlier build is still recognised; new installs write them as the old default (on), and the 1.0.3.0
+# firmware ignores them (stock harp, stock clap). The 1.0.2.9 variant keeps its recipe as it was (both on).
+HIDDEN = {'electric_harp', 'better_clap'}
+SWITCHES2 = ['linndrum']      # settings block byte 7, stored inverted (bit 0 = 1: LinnDrum off; mod2.c CF2_LINNOFF): older blocks (0) read as on
+def shown(d):
+    """d without the hidden switches (to compare what the window shows)."""
+    return {k: v for k, v in d.items() if k not in HIDDEN}
+B3_DEF = [2, 18, 3, 2, 19]      # 2.139: the third voice bank's subs (VOICE 1-5: Mellow Pad, Strings, Sine Pad, Mellow Pad, Strings 2); settings block [38..42] (0 = this default)
 def default_settings():
     return {'midi': {'Main': {'channel': 8, 'presets': [0, 0, 1, 1, 1]}, 'Chord': {'channel': 9, 'presets': [1, 0, 1, 1, 1]},
                      'Bass': {'channel': 7, 'presets': [0, 0, 0, 1, 1]}, 'Sub': {'channel': 9, 'presets': [0, 1, 0, 0, 0]},
                      'Drums': {'channel': 1, 'presets': [0, 0, 0, 0, 1]}},
             'clock': [0, 0, 0, 1, 1],
             'subs': [None] + [{'sub': n, 'alt': a} for n, a in zip([3, 17, 3, 3, 3, 2, 21, 18, 18], [2, 1, 7, 19, 2, 11, 20, 15, 2])],
-            **{k: k != 'analog_mute' for k in SWITCHES}}
+            'b3': list(B3_DEF),
+            **{k: k != 'analog_mute' for k in SWITCHES}, **{k: True for k in SWITCHES2}}
 def norm_settings(d):
     """A clean copy of d, checked (Stop if anything is out of range)."""
     try:
@@ -212,7 +222,10 @@ def norm_settings(d):
         for s in d['subs'][1:]:
             if s['sub'] not in SUB_NAMES or s['alt'] not in SUB_NAMES: raise ValueError('sub')
             out['subs'].append({'sub': int(s['sub']), 'alt': int(s['alt'])})
-        for k in SWITCHES: out[k] = bool(d[k]) if k in d else k in INVERTED   # (a pending install from before the mute's switch: on, as it read)
+        out['b3'] = [int(x) for x in d.get('b3', B3_DEF)]
+        if len(out['b3']) != 5 or any(x not in SUB_NAMES for x in out['b3']): raise ValueError('bank 3 sub')
+        for k in SWITCHES: out[k] = bool(d[k]) if k in d else (k in INVERTED or k in HIDDEN)   # (a pending install from before the mute's switch: on, as it read)
+        for k in SWITCHES2: out[k] = bool(d.get(k, True))
         return out
     except (KeyError, TypeError, ValueError, AttributeError) as e:
         raise Stop(f'the settings could not be read ({e}); Suggested Defaults sets them all back')
@@ -224,7 +237,9 @@ def settings_block(d):
     struct.pack_into('<IB', b, 0, CFG_MAGIC, 1)
     b[5] = sum(1 << i for i, k in enumerate(SWITCHES) if d[k] != (k in INVERTED))
     b[6] = sum(1 << i for i, x in enumerate(d['clock']) if x)
+    b[7] = sum(1 << i for i, k in enumerate(SWITCHES2) if not d[k])
     for v in range(1, 10): b[8 + v] = fw_sub(v, d['subs'][v]['sub']); b[18 + v] = fw_sub(v, d['subs'][v]['alt'])
+    for i in range(5): b[38 + i] = 0 if d['b3'][i] == B3_DEF[i] else d['b3'][i]      # 0 = the default (blocks from before 2.139 are the same)
     for i, p in enumerate(PARTS):
         b[28 + i] = d['midi'][p]['channel'] or 0; b[33 + i] = sum(1 << j for j, x in enumerate(d['midi'][p]['presets']) if x)
     struct.pack_into('<I', b, 60, CFG_MAGIC ^ 0xFFFFFFFF)
@@ -238,7 +253,9 @@ def settings_from_block(b):
         d = {'midi': {p: {'channel': b[28 + i] or None, 'presets': [(b[33 + i] >> j) & 1 for j in range(5)]} for i, p in enumerate(PARTS)},
              'clock': [(b[6] >> j) & 1 for j in range(5)],
              'subs': [None] + [{'sub': un(v, b[8 + v]), 'alt': un(v, b[18 + v])} for v in range(1, 10)],
-             **{k: bool((b[5] >> i) & 1) != (k in INVERTED) for i, k in enumerate(SWITCHES)}}
+             'b3': [b[38 + i] or B3_DEF[i] for i in range(5)],
+             **{k: bool((b[5] >> i) & 1) != (k in INVERTED) for i, k in enumerate(SWITCHES)},
+             **{k: not (b[7] >> i) & 1 for i, k in enumerate(SWITCHES2)}}
         d = norm_settings(d)
         return d if settings_block(d) == bytes(b[:64]) else None
     except Stop: return None
@@ -258,6 +275,10 @@ def build_image(backup, recipe, d):
     img = bytearray(backup); put_runs(img, runs, data)
     if sha(img[:FW_END]) != hdr['target_fw_sha256']: raise Stop('internal error: the result does not match the mod')
     if d == default_settings(): return bytes(img)
+    return bytes(_apply(img, backup, hdr, d))
+def _apply(img, backup, hdr, d, legacy=False):
+    """The settings d on img (a Suggested Default image). legacy: as the tool before 2.132 did (an earlier build's image:
+    its Electric Harp / Better Clap bytes follow the hidden switches; LinnDrum and Extras change nothing there)."""
     vt = hdr.get('vt_flash', VT_FLASH)
     for p in range(5):                                            # MIDI routing
         for part, ch in PART_CH.items():
@@ -269,18 +290,22 @@ def build_image(backup, recipe, d):
             base = vt + slot * 0x40; img[base + SUB_OFF[v]] = n
             if BOOST_L[v]:
                 L = base + BOOST_L[v] * 16
-                if 1 in (n, a):
+                if 1 in (n, a) or (v == 9 and 1 in d['b3']):          # 2.139: the third bank borrows the banjo's slot: its Evolve needs the boost layer too
                     lay = bytearray(img[base + SUB_OFF[v] - 1:base + SUB_OFF[v] + 15]); lay[1] = 1
                     lay[13] = boost_vol(lay[13]) if n == 1 else 0
                     img[L:L + 16] = lay
                 else: img[L:L + 16] = backup[L:L + 16]
-    if not d['better_clap']: a, b = hdr['clap']; img[a:b] = backup[a:b]
-    if not d['electric_harp']:
-        H = hdr['harp_stock']
-        for src, n, dst in H['moves']: img[dst:dst + n] = backup[src:src + n]
-        for adr, val in H['words']: struct.pack_into('<I', img, adr, val)
+    clap, harp = (hdr.get('legacy_clap'), hdr.get('legacy_harp')) if legacy else (hdr.get('clap'), hdr.get('harp_stock'))
+    if clap and not d['better_clap']: a, b = clap; img[a:b] = backup[a:b]
+    if harp and not d['electric_harp']:
+        for src, n, dst in harp['moves']: img[dst:dst + n] = backup[src:src + n]
+        for adr, val in harp['words']: struct.pack_into('<I', img, adr, val)
+    if not legacy:                                                # 2.132: the switches that give back stock bytes
+        for k, area in (('linndrum', 'linn_stock'), ('extras', 'extras_stock')):
+            if not d[k]:
+                for a, n in hdr.get(area, []): img[a:a + n] = backup[a:a + n]
     img[CFG_OFF:CFG_OFF + 64] = settings_block(d)
-    return bytes(img)
+    return img
 def legacy_images(backup, recipe):
     """[(name, image)] for the earlier releases this tool knows (the Suggested Default image with their own bytes)."""
     hdr, runs, data = recipe; out = []
@@ -294,10 +319,21 @@ def legacy_images(backup, recipe):
         out.append((L['name'], bytes(img)))
     return out
 
-def code_variants(backup, recipe, img):
+def code_variants(backup, recipe, img, d=None):
     """The same settings firmware as img with the code of each earlier settings build this tool knows (a unit installed
-    with an earlier version of this tool): [(name, image)]."""
+    with an earlier version of this tool): [(name, image)]. d: the settings img was built with; a recipe from 2.132 on
+    rebuilds each earlier build with them as the tool of that time did (its harp / clap followed switches now gone)."""
     out = []
+    if d is not None and 'legacy_clap' in recipe[0]:
+        d = norm_settings(d); base = build_image(backup, recipe, default_settings())
+        for L in recipe[0]['legacy']:
+            if not L.get('code_only'): continue
+            v = bytearray(base)
+            for a, n in L['stock']: v[a:a + n] = backup[a:a + n]
+            put_runs(v, L['_runs'], L['_data'])
+            if d != default_settings(): v = _apply(v, backup, recipe[0], d, legacy=True)
+            out.append((L['name'], bytes(v)))
+        return out
     for L in recipe[0]['legacy']:
         if not L.get('code_only'): continue
         v = bytearray(img)
@@ -530,10 +566,10 @@ class Patcher:
         out = [img for _, img in legacy_images(backup, rec)]
         d = settings_from_block(u.read(CFG_OFF, 64))
         if d:
-            img = build_image(backup, rec, d); out.append(img); out += [v for _, v in code_variants(backup, rec, img)]
+            img = build_image(backup, rec, d); out.append(img); out += [v for _, v in code_variants(backup, rec, img, d)]
         p = self.state().get('pending')
         if p:
-            try: img = build_image(backup, rec, p); out.append(img); out += [v for _, v in code_variants(backup, rec, img)]
+            try: img = build_image(backup, rec, p); out.append(img); out += [v for _, v in code_variants(backup, rec, img, p)]
             except Stop: pass
         return out
     def _factory(self, u):
@@ -664,12 +700,12 @@ class Patcher:
         if rec is None or backup is None: return 'a User Generated Custom Firmware', 'unknown'
         s = settings_from_block(d[CFG_OFF:CFG_OFF + 64])
         if s and h == sha(build_image(backup, rec, s)[:FW_END]): return 'a User Generated Custom Firmware (made with this tool)', 'custom'
-        if s and any(h == sha(v[:FW_END]) for _, v in code_variants(backup, rec, build_image(backup, rec, s))):
+        if s and any(h == sha(v[:FW_END]) for _, v in code_variants(backup, rec, build_image(backup, rec, s), s)):
             return ('an earlier version of the Suggested Default firmware (Install brings it up to date)' if s == default_settings() else
                     'a User Generated Custom Firmware made with an earlier version of this tool (Install brings it up to date)'), 'legacy'
         regs = regions_for(rec)
         known = [backup] + [img for _, img in legacy_images(backup, rec)] + ([build_image(backup, rec, s)] if s else [])
-        if s: known += [v for _, v in code_variants(backup, rec, known[-1])]
+        if s: known += [v for _, v in code_variants(backup, rec, known[-1], s)]
         p = self.state().get('pending')
         if p:
             try: known.append(build_image(backup, rec, p))
@@ -712,6 +748,53 @@ class Patcher:
         if s: res['settings'] = s
         return res
 
+    def cmd_ramtest(self):
+        """Diagnostic for the firmware's author: how much of the chip's RAM above the flashloader is there to use. The unit is connected read
+        only: the flash is never written. 16 bytes of test pattern are written into the RAM (and the old bytes put back); the RAM forgets
+        them at power-off anyway. If an address is not there the flashloader may hang: unplug and plug the USB cable and run it again; the
+        lines already shown say how far it got. Everything shown is also in logs/patcher_<date>.log."""
+        self.say('RAM test. Connecting (read only: the flash is never written; only 16-byte patterns are put in the chip\'s RAM)...')
+        u = self.unit(RO_FCB)
+        f = u.work / 'ramtest.bin'
+        def peek(addr, n):
+            if f.exists(): f.unlink()
+            ok, _ = u._bl('read-memory', '0x%08X' % addr, '0x%X' % n, str(f))
+            d = f.read_bytes() if ok and f.exists() else b''
+            return d if len(d) == n else None
+        def poke(addr, data):
+            f.write_bytes(data); return u._bl('write-memory', '0x%08X' % addr, str(f))[0]
+        ok, text = u._bl('get-property', '12')
+        self.say('Regions the flashloader keeps for itself (get-property 12): ' + (text.strip().replace('\n', ' | ')[-300:] if ok else 'not reported'))
+        n_oc = None
+        for name, a in (('IOMUXC_GPR14 (TCM sizes)', 0x400AC038), ('IOMUXC_GPR16 (FlexRAM config source)', 0x400AC040), ('IOMUXC_GPR17 (FlexRAM banks)', 0x400AC044)):
+            d = peek(a, 4)
+            if d is None: self.say(f'  {name} at 0x{a:08X}: not readable through the flashloader'); continue
+            v = struct.unpack('<I', d)[0]; self.say(f'  {name} at 0x{a:08X}: 0x{v:08X}')
+            if a == 0x400AC044:
+                kinds = ('none', 'OCRAM', 'DTCM', 'ITCM'); cnt = {}
+                for b in range(16): cnt[kinds[(v >> (2 * b)) & 3]] = cnt.get(kinds[(v >> (2 * b)) & 3], 0) + 1
+                self.say('    banks (2 bits each, bank 0 first): ' + ' '.join(kinds[(v >> (2 * b)) & 3][0] for b in range(16)) + f'   ->  {cnt}'); n_oc = cnt.get('OCRAM', 0)
+        probes, written, top = [], {}, 0x20218000
+        for bank in range(5):                                 # the 32 KB banks from 0x20218000 (below that the flashloader lives)
+            base = 0x20218000 + 0x8000 * bank
+            probes += [base, base + 0x7FF0]
+        self.say('Trying RAM, 16 bytes at the start and at the end of each 32 KB bank from 0x20218000 up:')
+        for a in probes:
+            pat = struct.pack('<4I', a, a ^ 0xFFFFFFFF, (a * 2654435761) & 0xFFFFFFFF, 0xC0DEFACE)
+            old = peek(a, 16)
+            if old is None: self.say(f'  0x{a:08X}: cannot be read -> no RAM here (or the flashloader refuses it). Stopping.'); break
+            if not poke(a, pat) or peek(a, 16) != pat:
+                self.say(f'  0x{a:08X}: written but it does not read back -> no RAM here. Stopping.'); poke(a, old); break
+            written[a] = (pat, old); self.say(f'  0x{a:08X}: RAM, works'); top = a + 16
+        alias = [a for a, (pat, old) in written.items() if peek(a, 16) != pat]
+        for a, (pat, old) in written.items(): poke(a, old)
+        if alias: self.say('  a second look found these changed by writes elsewhere (the RAM repeats itself): ' + ' '.join('0x%08X' % a for a in alias))
+        end = 0x20200000 + ((top - 0x20200000 + 0x7FFF) // 0x8000) * 0x8000 if written else 0x20218000
+        self.say('RESULT: ' + (f'RAM works up to about 0x{end:08X} ({(end - 0x20200000) // 1024} KB from 0x20200000)' if written and not alias else
+                               'nothing usable found above 0x20218000' if not written else 'unclear (the RAM seems to repeat)')
+                 + '. The stock firmware itself uses only 0x20200000-0x20201AA8 of it.'
+                 + (f' The chip says {n_oc} of its banks are OCRAM (32 KB each on this chip family).' if n_oc is not None else ''))
+        return {'ram_end': end, 'aliased': alias, 'ok': sorted(written)}
     def cmd_check(self):
         backup = self.load_backup(); rec = self.recipe(backup); regs = regions_for(rec)
         self.say('Connecting (read only: nothing is written)...')
@@ -724,7 +807,7 @@ class Patcher:
 
 def main(argv=None, tools_factory=None, folder=None, out=print, result=None):
     ap = argparse.ArgumentParser(description='OM-108 mod patcher', epilog=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('command', choices=['backup', 'install', 'restore', 'check', 'scan', 'import-backup', 'install-stock'])
+    ap.add_argument('command', choices=['backup', 'install', 'restore', 'check', 'scan', 'import-backup', 'install-stock', 'ramtest'])
     ap.add_argument('file', nargs='?')
     ap.add_argument('--settings', help='install: a settings file (JSON, written by the window); none = the Suggested Default')
     ap.add_argument('--full', action='store_true', help='restore: Full Factory Restore (every differing sector, the start-up area too)')

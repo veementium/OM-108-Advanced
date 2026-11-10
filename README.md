@@ -19,7 +19,7 @@ The full guide to the new features on the instrument is the one-page **[User Man
 > written. (1.0.3.0 support has been tested on a computer model of the unit and on one real unit; reports from 1.0.3.0 owners are welcome.)
 > Every feature and sound is the same on both; each unit keeps the small differences of its own factory firmware.
 
-Current version: **tool 1.3.1**. What changed in each version: [Releases](https://github.com/johnnywagner/Omnichord-OM-108-Custom-Firmware/releases).
+Current version: **tool 1.3**. What changed in each version: [Releases](https://github.com/johnnywagner/Omnichord-OM-108-Custom-Firmware/releases).
 
 ## Quick start
 **Setup (once):**
@@ -73,33 +73,40 @@ alternate sub sound due to technical limitations. Both sounds are configurable i
 | **Alt** | – | Mellow Pad | Evolve | Church Bell | Strings 2 | Mellow Pad | Rezy | 7th Doo | Hand Pan | Mellow Pad |
 
 ### Modulation Modes (Instant OFF plate)
-In keyboard mode, three chord buttons that are otherwise unused set what the Instant OFF plate does:
-- **“G♭-7th”** sets the modulation mode.
-  - **Tap:** cycle to the next mode, displayed on the [VOICE] LEDs. The device will announce the selected mode.
-  - **Hold + [↑]/[↓] buttons:** cycle through the modes silently.
-  - **Hold + [VOICE] button 1–5:** choose one of the 5 modulation modes directly & silently.
-- **“G♭-MINOR”:** hold to adjust the speed of the Auto modes with the [↑]/[↓] buttons, −6 to +6 on the [VOICE] LEDs.
-- **“D♭-MINOR”:** hold to adjust the depth of the current mode, 0 to 12 on the [PATTERN] LEDs.
+In keyboard mode, chord buttons that are otherwise unused set the Instant OFF plate's modulation and the keyboard effects.
+The modes are **Note Off** (stock), **Vibrato Auto** and **Tremolo Auto** (the Manual modes are gone).
+- **“G♭-7th”** held = mode selection. The yellow [VOICE] button's top LED is Note Off, [VOICE] 2 is Vibrato and [VOICE] 4 is Tremolo; the
+  selected one blinks. Press the yellow [VOICE] button (Note Off), [VOICE] 2 (Vibrato) or [VOICE] 4 (Tremolo), or step with the [↑]/[↓] buttons
+  (pressing both = Note Off). A plain tap does nothing; when you let go the LEDs go straight back to what they showed.
+- **“B-MINOR”** (vibrato) and **“D-MINOR”** (tremolo): hold them while playing keyboard notes to hear the effect. While one is held, the
+  **Sustain** knob sets its depth and the **Tempo** knob its speed (nothing happens until you move a knob). These settings are saved, one pair
+  for each effect, and are also the ones the Instant OFF plate's Auto modes use. The stock tempo does not change meanwhile.
 
-The [↓]/[↑] buttons are the “E♭-MAJOR”/“B♭-MAJOR” chord buttons, the same as for adjusting Transpose and Master Tune.
-Reminder: pressing both together resets the parameter.
-
-The 5 modes:
+The 3 modes:
 - **Instant Off:** stock behavior.
 - **Vibrato Auto:** like the stock behavior, a finger on the plate enables the vibrato, but the plate now detects
   partial coverage and adjusts speed and depth accordingly. Try rolling your finger off slowly after pressing to hear
   the effect.
-- **Vibrato Manual:** rest a finger on a corner of the Instant OFF plate and rock it in and out, like bending a guitar
-  string.
 - **Tremolo Auto:** the same as Vibrato Auto but for volume.
-- **Tremolo Manual:** the same as Vibrato Manual but for volume.
+
+### Keyboard-mode effects (Extras)
+Hold a chord button in keyboard mode and move the **Sustain** and **Tempo** knobs (nothing changes until a knob moves; the stock tempo and note
+length stay as they are meanwhile; the effects are off at power-on, except the resonance which is saved):
+- **“B♭-MINOR”:** Sustain = filter cutoff, Tempo = resonance (the resonance is saved and the cutoff always starts at 0).
+- **“G♭-MINOR”:** delay: Sustain = time (50 ms to 0.44 s), Tempo = repeats.
+- **“D♭-MINOR”:** reverb: Sustain = amount, Tempo = decay. While it is held, each new note also **glides** from the previous note's
+  pitch to its own (about 0.12 s; every sounding note bends with it).
+
+**Arpeggiator latch:** hold **“G♭-7th”** and press the yellow [PATTERN] button to switch the latch mode on (press it again, with G♭-7th held,
+to switch it off). While G♭-7th is held the yellow [PATTERN] button's LEDs show the mode: only the bottom LED = off, both = on. With the latch
+mode on, the arpeggio keeps playing the last keys after you let go; pressing keys after all were let go starts a new set. A short tap on
+G♭-7th by itself lets the arpeggiated chord go (the arpeggio stops) and the latch mode stays on, ready to latch the next chord. Leaving
+keyboard mode switches the latch mode off.
 
 **Modulation notes:** both Vibrato modes send matching MIDI pitch bend out. Both Tremolo modes are local to the unit and
 are not sent over MIDI. Due to limitations of the analog circuits, neither Tremolo mode works on “omni 1” or the main
 voice of “omni 2”.
 
-**Keyboard Mode Modulation:** in keyboard mode, hold the “B♭-MINOR”, “D-MINOR” or “B-MINOR” chord button (before or after the notes)
-to play an Auto modulation mode on the played notes.
 
 ### Third Manual/Auto state
 Hold the [Chord Manual/Auto] button and press the [KEYBOARD (ON)] button at any time to enter a third Manual/Auto state
@@ -116,11 +123,14 @@ combining Manual chords with the Auto bass (both LEDs lit).
 - **MIDI:** the stock MIDI CC out messages (Volume & Release) are removed, making room for a fifth MIDI preset, P5.
 - **Bug fixes:** two small bugs in the stock firmware, involving LED states and chord data sent via MIDI out, have been
   fixed.
-- **Sounds:** the “harp” voice's main sound has been replaced with an electric harp sound (**Electric Harp**), and the
-  clap rhythm sound has been replaced (**Better Clap**).
+- **LinnDrum LM-2** (on by default): the 108 rhythm mode's drums are LinnDrum LM-2 samples (the 84 mode shares the
+  common sounds). In the 108 patterns the toms play congas and, in slow rock, swing, bossanova and waltz, the open hi-hat
+  plays the ride. Off: the stock drums and patterns.
+- **Extras** also bring a new one-sample banjo sound and a third voice bank (hold the [VOICE] left button (yellow)
+  until both its LEDs light) with 5 more voices, whose sub sounds you choose in the tool (Sub Sounds, “Bank 3”).
+  Extras off: the stock banjo.
 - **Spoken Mode Names:** the unit announces the rhythm mode chosen at power-on ([PATTERN (swing/waltz)]: “84 mode”,
-  [PATTERN (country/bossanova)]: “108 mode”, [PATTERN (slow rock/funk)]: “27 mode”) and also the Modulation Mode
-  selected via tapping.
+  [PATTERN (slow rock/funk)]: “27 mode”). The Modulation Modes are no longer spoken.
 
 ### MIDI Presets reference (default)
 Choose at power-on: hold [VOICE] button 1–5. Each part is sent on its own channel. In the tool you can pick each part's
@@ -177,6 +187,9 @@ when switching chords.
   would like this file removed, please open an issue and it will be taken down.
 - **Flash configuration blocks** (`assets/omnichord_rw_fcb.bin`, `assets/omnichord_readonly_fcb.bin`): 512-byte flash
   settings read from the instrument, the write version adjusted for this tool.
+- **LinnDrum LM-2 samples** (in the recipe, written into the 108 drum sounds): from Oramics' "Sampled" collection,
+  given there as public domain (originally from machines.hyperreal.org). LinnDrum is a trademark of its owner; if you
+  hold rights to these sounds and would like them removed, please open an issue.
 - **NXP SPSDK** (`pip install spsdk`) does the USB communication. It is installed separately and not included here.
 - **Suzuki and Omnichord** are trademarks of their respective owners, used here only to say which instrument this tool
   is for. This project contains no Suzuki firmware: the tool works from your own unit's firmware, read from your unit.

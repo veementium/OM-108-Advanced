@@ -62,7 +62,7 @@ def Z(n, lo=1):
     """A size in pixels (padding, box sizes) at the current zoom."""
     return max(lo, round(n * ZOOM))
 
-GUI_VERSION = '0.49'
+GUI_VERSION = '0.47'
 SETTINGS_ACTIVE = True       # the firmware reads the settings block (Install uses the window's choices)
 SETTINGS = UNIT / 'settings.ini'
 BACKUPS = UNIT / 'backups'
@@ -143,8 +143,7 @@ SUBS = {1: 'Evolve', 2: 'Mellow Pad', 3: 'Sine Pad', 7: 'Church Bell', 11: 'Rezy
 OLD_NAMES = {'pad': 3, 'pad (octave)': 3, 'vibes alt': 15, 'harp': 17, 'organ alt': 20, 'organ': 21}   # names in older settings.ini
 SUB_NRM = [None, 3, 17, 3, 3, 3, 2, 21, 18, 18]                                     # mod2.c SUB_NRM / SUB_ALT (guitar 13 = 3)
 SUB_ALT = [None, 2, 1, 7, 19, 2, 11, 20, 15, 2]
-FLAGS = [('drum_map', 'midi', 'drum_note_remap'), ('electric_harp', 'sounds', 'electric_harp'),
-         ('better_clap', 'sounds', 'better_clap'), ('modulation', 'features', 'modulation_modes'),
+FLAGS = [('drum_map', 'midi', 'drum_note_remap'), ('linndrum', 'sounds', 'linndrum_lm2'), ('modulation', 'features', 'modulation_modes'),
          ('extras', 'features', 'extras'), ('spoken_names', 'features', 'spoken_mode_names'),
          ('kb_transpose', 'features', 'keyboard_transpose'), ('analog_mute', 'features', 'low_chord_volume_mute')]
 
@@ -152,8 +151,8 @@ def defaults():
     return {'midi': {v: {'channel': c, 'presets': list(p)} for v, (c, p) in MIDI_DEFAULT.items()},
             'clock': list(CLOCK_DEFAULT),
             'subs': [None if n is None else {'sub': n, 'alt': a} for n, a in zip(SUB_NRM, SUB_ALT)],
-            'drum_map': True, 'electric_harp': True, 'better_clap': True, 'modulation': True, 'extras': True, 'spoken_names': True,
-            'kb_transpose': True, 'analog_mute': False}
+            'drum_map': True, 'linndrum': True, 'modulation': True, 'extras': True, 'spoken_names': True,
+            'kb_transpose': True, 'analog_mute': False, 'b3': list(OP.B3_DEF)}
 
 # ------------------------------------------------------------------------------------------------- settings.ini
 def key(name): return name.lower().replace('. ', '_').replace(' ', '_')
@@ -171,7 +170,8 @@ def ini_text(d, win=None):
           '# sub sounds: ' + ', '.join(SUBS[k] for k in sorted(SUBS))]
     for v, s in enumerate(d['subs']):
         if s: L += [f'{key(VOICES[v])}_sub = {SUBS[s["sub"]]}', f'{key(VOICES[v])}_alt = {SUBS[s["alt"]]}']
-    L += [f'electric_harp = {yn(d["electric_harp"])}', f'better_clap = {yn(d["better_clap"])}', '', '[bonus features]',
+    L += [f'extras_voice{i + 1}_sub = {SUBS[x]}' for i, x in enumerate(d['b3'])]
+    L += [f'linndrum_lm2 = {yn(d["linndrum"])}', '', '[bonus features]',
           f'modulation_modes = {yn(d["modulation"])}', f'extras = {yn(d["extras"])}', f'spoken_mode_names = {yn(d["spoken_names"])}',
           f'keyboard_transpose = {yn(d["kb_transpose"])}', f'low_chord_volume_mute = {yn(d["analog_mute"])}', '']
     if win: L += ['[window]', '# the window size you set (it keeps its proportions; delete this line for the size fitted to the screen)', f'size = {win[0]} x {win[1]}', '']
@@ -214,6 +214,7 @@ def ini_read(text, warn):
         if s:
             s['sub'] = get('sounds', key(VOICES[v]) + '_sub', p_sub, s['sub'])
             s['alt'] = get('sounds', key(VOICES[v]) + '_alt', p_sub, s['alt'])
+    for i in range(5): d['b3'][i] = get('sounds', f'extras_voice{i + 1}_sub', p_sub, d['b3'][i])
     for f, sec, k in FLAGS:
         if sec == 'features': d[f] = get('features', k, p_yes, d[f]); sec = 'bonus features'
         d[f] = get(sec, k, p_yes, d[f])
@@ -244,19 +245,19 @@ DEFAULT_TIPS = [
     ('alt', 'The sub sound you get by pressing the lit [VOICE] button again. This setting is saved.'),
     ('voice_omni_1', '“omni 1” is analog only: it has no customizable sub sound.'),
     ('voice_omni_2', '**omni 2:** its sub and alt sounds.'),
-    ('voice_harp', '**harp:** its sub and alt sounds. Its main sound is set with Electric Harp (Bonus Features).'),
+    ('voice_harp', '**harp:** its sub and alt sounds.'),
     ('voice_celesta', '**celeste:** its sub and alt sounds.'),
     ('voice_a_piano', '**A. piano:** its sub and alt sounds.'),
     ('voice_guitar', '**guitar:** its sub and alt sounds.'),
     ('voice_fm_piano', '**FM piano:** its sub and alt sounds.'),
     ('voice_organ', '**organ:** its sub and alt sounds.'),
     ('voice_vibes', '**vibes:** its sub and alt sounds.'),
-    ('voice_banjo', '**banjo:** its sub and alt sounds.'),
-    ('electric_harp', 'Replaces the main sound of the stock “harp” voice with a custom electric harp / clav sound.'),
-    ('better_clap', 'Replaces the stock clap rhythm sound (also played by the Instant OFF plate in keyboard mode) with a "better" clap sound.'),
+    ('voice_bank3', '**Bank 3 (Extras):** the sub sound of this voice of the third voice bank (hold the yellow [VOICE] button: both its lights come on). Only used with Extras on. This setting is saved.'),
+    ('voice_banjo', '**banjo:** its sub and alt sounds. With Extras on, its main sound is a new one-sample sound (Bonus Features).'),
+    ('linndrum', 'Replaces the drum sounds of the 108 rhythm mode with LinnDrum LM-2 samples (rhythm patterns, drum pads, the plates in keyboard mode, the step sequencer). The 84 mode shares the common sounds; its own stay stock.\nIn the 108 patterns, the toms play congas, the open hi-hat plays the ride in slow rock, swing, bossanova and waltz, and bossanova swaps the congas.\n**Off:** the stock drum sounds and patterns.'),
     ('header', '**Always On Mods**\n- **Saved Settings:** all your settings are saved between power-offs, except for Jazz Mode.\n- A factory reset (both [VOICE] and [PATTERN] left buttons (yellow) held while switching on) now sets the battery type to Ni-MH and also clears the saved settings.\n- The stock MIDI CC out messages (Volume & Release) have been removed, making room for a fifth MIDI preset, P5.\n\n**Stock Firmware Bug Fixes:** two small bugs involving LED states and chord data sent via MIDI out have been fixed (e.g. the held chord is now preserved on MIDI out when switching from Auto to Manual).'),
     ('modulation', "Changes what the Instant OFF plate does, using the 3 chord buttons at the bottom left of the chord button grid that are unused in keyboard mode.\n\nIn keyboard mode, the “G♭-7th” chord button sets the modulation mode, in one of 3 ways:\n**Tap:** cycles to the next mode, shown on the [VOICE] LEDs. The unit announces the selected mode (intended for beginners).\n**Hold + [↑]/[↓] buttons:** cycles through the modes silently, like setting Transpose or Master Tune.\n**Hold + [VOICE] button 1–5:** chooses one of the 5 modes directly and silently. This is my preferred method.\n\n**The 5 modes:**\n- **Instant Off:** the stock behavior.\n- **Vibrato Auto:** like the stock behavior, a finger on the plate turns on the vibrato. The plate now also detects partial coverage and adjusts speed and depth accordingly. Try rolling your finger off slowly after pressing.\n- **Vibrato Manual:** rest a finger on a corner of the Instant OFF plate and rock it in and out, like bending a guitar string.\n- **Tremolo Auto:** the same as Vibrato Auto, but for volume.\n- **Tremolo Manual:** the same as Vibrato Manual, but for volume.\n\n**Speed (Auto modes):** hold the “G♭-MINOR” chord button and press [↑]/[↓], −6 to +6 on the [VOICE] LEDs.\n**Depth:** hold the “D♭-MINOR” chord button and press [↑]/[↓], 0 to 12 on the [PATTERN] LEDs.\nThe [↓]/[↑] buttons are the “E♭-MAJOR”/“B♭-MAJOR” chord buttons, as for Transpose and Master Tune; pressing both together resets the setting.\n\n**Notes:**\n- In keyboard mode, hold the “B♭-MINOR”, “D-MINOR” or “B-MINOR” chord button (before or after the notes) to play an Auto modulation mode on the played notes.\n- Both Vibrato modes send matching MIDI pitch bend out. Both Tremolo modes are local to the unit and are not sent over MIDI.\n- Due to limitations of the analog circuits, neither Tremolo mode works on “omni 1” or the main voice of “omni 2”.\n\nEach mode's settings are saved automatically and are unique to that mode."),
-    ('extras', '**OM-27 mode:** hold the [PATTERN (slow rock/funk)] button on startup. The 6 [PATTERN] buttons (including the yellow one) then play the 6 OM-27 rhythm patterns.\n  - From left to right: Latin (yellow), Rock, Foxtrot, Slow Rock, Waltz, Swing.\n  - Hold any 2 [PATTERN] buttons and press the [KEYBOARD (ON)] button to lock the selection.\n  - Otherwise, this mode works just like the OM-27.\n\n**Alternate Bass:** hold the [PATTERN] left button (yellow) on startup for an alternate (plucked) bass sound. Hold the [VOICE] left button (yellow) for the stock bass sound.\n\n**Jazz Mode:** hold the [KEYBOARD (ON)] button on startup. Changes and adds chord fingerings, and voice leads intelligently when switching chords. This is the only setting NOT remembered between power cycles. Have fun!\n\n**3rd Manual/Auto State:** hold the [Chord Manual/Auto] button and press the [KEYBOARD (ON)] button at any time (both LEDs lit). This third state combines Manual chords with the Auto bass. Do the same again to go back.'),
+    ('extras', '**OM-27 mode:** hold the [PATTERN (slow rock/funk)] button on startup. The 6 [PATTERN] buttons (including the yellow one) then play the 6 OM-27 rhythm patterns.\n  - From left to right: Latin (yellow), Rock, Foxtrot, Slow Rock, Waltz, Swing.\n  - Hold any 2 [PATTERN] buttons and press the [KEYBOARD (ON)] button to lock the selection.\n  - Otherwise, this mode works just like the OM-27.\n\n**Alternate Bass:** hold the [PATTERN] left button (yellow) on startup for an alternate (plucked) bass sound. Hold the [VOICE] left button (yellow) for the stock bass sound.\n\n**Jazz Mode:** hold the [KEYBOARD (ON)] button on startup. Changes and adds chord fingerings, and voice leads intelligently when switching chords. This is the only setting NOT remembered between power cycles. Have fun!\n\n**3rd Manual/Auto State:** hold the [Chord Manual/Auto] button and press the [KEYBOARD (ON)] button at any time (both LEDs lit). This third state combines Manual chords with the Auto bass. Do the same again to go back.\n\n**New Banjo and 3rd Voice Bank:** the “banjo” voice plays a new one-sample sound. Hold the [VOICE] left button (yellow) until both its LEDs light: the 5 [VOICE] buttons then play 5 more one-sample voices, each with its own sub sound. Tap the yellow button to go back to the banjo.\nWith Extras off, the banjo is the stock one.'),
     ('spoken_names', 'The unit announces the rhythm mode chosen at power-on ([PATTERN (swing/waltz)]: “84 mode”, [PATTERN (country/bossanova)]: “108 mode”, [PATTERN (slow rock/funk)]: “27 mode”) and the modulation mode selected by tapping the “G♭-7th” chord button. I recommend leaving this on.\n**Off:** the modes still change and the LEDs still show them; nothing is spoken.'),
     ('kb_transpose', 'In keyboard mode, the chromatic keyboard notes follow the Transpose setting, like the chords and the strumplate do (MIDI out too). If you change Transpose while holding a note, the new setting starts with the next note you play.\n**Off:** the stock behavior: keyboard notes ignore Transpose.'),
     ('analog_mute', "When enabled, the chord knob hard mutes right before it bottoms out, choking any unwanted analog noise. This was added by Suzuki on newer models but may not be desirable for all use cases. If you don't notice a difference, leave it off. This is never applied on “omni 1” and only on “omni 2” with [Main Volume] also low."),
@@ -325,44 +326,35 @@ def load_popups():
                '# Read when the tool starts. Blank lines inside a text are kept.\n')
 
 def tip(widget, key):
-    """A small note that appears while the mouse is over the widget. Returns the widget.
-    It is drawn inside the widget's own window, not as a window of its own: on Windows the separate tooltip window
-    flickered (1.3) or never showed (1.3.1-beta.1, built off screen or hidden first)."""
+    """A small note that appears while the mouse is over the widget. Returns the widget."""
     state = {'win': None, 'job': None}
-    def hide():
-        if state['job']: widget.after_cancel(state['job']); state['job'] = None
-        if state['win']: state['win'].destroy(); state['win'] = None
     def show():
         state['job'] = None
         if state['win'] or not widget.winfo_viewable(): return
-        top = widget.winfo_toplevel(); tw, th = top.winfo_width(), top.winfo_height()
+        w = tk.Toplevel(widget); w.wm_overrideredirect(True)
+        w.wm_geometry('+-20000+-20000')          # built and measured off screen: it shows once, in its place (no flash, and never under the mouse)
         text = TIPS.get(key, key); fam = tkfont.nametofont('TkDefaultFont', root=widget).cget('family')
-        plain = text.replace('**', ''); cw = max(1, int(widget.tk.call('font', 'measure', (fam, F(10)), '0')))
-        cols = max(12, min(95, max(len(l) for l in plain.splitlines() or ['']), (tw - 40) // cw))   # no wider than the window
-        box = tk.Text(top, bg=ACCENT, fg=INK, relief='solid', bd=1, padx=8, pady=5, wrap='word', highlightthickness=0,
-                      cursor='arrow', font=(fam, F(10)), width=cols, height=1)
+        plain = text.replace('**', '')
+        box = tk.Text(w, bg=ACCENT, fg=INK, relief='solid', bd=1, padx=8, pady=5, wrap='word', highlightthickness=0,
+                      cursor='arrow', font=(fam, F(10)), width=max(12, min(95, max(len(l) for l in plain.splitlines() or ['']))), height=1)
         box.tag_configure('b', font=(fam, F(10), 'bold'))
         for part in re.split(r'(\*\*.+?\*\*)', text):            # **bold** in tooltips.txt
             if part.startswith('**') and part.endswith('**') and len(part) > 4: box.insert('end', part[2:-2], 'b')
             else: box.insert('end', part)
-        box.place(x=-10000, y=-10000); top.update_idletasks()    # measured out of sight, then placed once
+        box.pack(); w.update_idletasks()
         n = box.count('1.0', 'end', 'update', 'displaylines'); n = n[-1] if isinstance(n, tuple) else n
-        box.configure(height=max(1, n or 1), state='disabled'); top.update_idletasks()
-        bw, bh = box.winfo_reqwidth(), box.winfo_reqheight()
-        wx, wy = widget.winfo_rootx() - top.winfo_rootx(), widget.winfo_rooty() - top.winfo_rooty()
-        x = max(8, min(wx + 12, tw - bw - 8))                    # below the item, or above it if there is no room below; inside the window
-        y = wy + widget.winfo_height() + 6
-        if y + bh > th - 8: y = max(8, wy - bh - 6)
-        box.place(x=x, y=y); box.lift(); box.bind('<Leave>', leave, add='+')
-        state['win'] = box
-    def enter(e):
-        if not state['win'] and not state['job']: state['job'] = widget.after(350, show)
-    def leave(e):                                                # (not when the mouse only moves between the item and its note)
-        try: under = widget.winfo_containing(e.x_root, e.y_root)
-        except (KeyError, tk.TclError): under = None
-        if under is not None and (under is widget or under is state['win']): return
-        hide()
-    widget.bind('<Enter>', enter, add='+'); widget.bind('<Leave>', leave, add='+'); widget.bind('<ButtonPress>', lambda e: hide(), add='+')
+        box.configure(height=max(1, n or 1), state='disabled')
+        w.update_idletasks()                     # below the item, or above it if there is no room below; inside the screen
+        x = min(widget.winfo_rootx() + 12, w.winfo_screenwidth() - w.winfo_reqwidth() - 8)
+        y = widget.winfo_rooty() + widget.winfo_height() + 6
+        if y + w.winfo_reqheight() > w.winfo_screenheight() - 40: y = max(8, widget.winfo_rooty() - w.winfo_reqheight() - 6)
+        w.wm_geometry(f'+{max(8, x)}+{y}')
+        state['win'] = w
+    def enter(e): state['job'] = widget.after(350, show)
+    def leave(e):
+        if state['job']: widget.after_cancel(state['job']); state['job'] = None
+        if state['win']: state['win'].destroy(); state['win'] = None
+    widget.bind('<Enter>', enter, add='+'); widget.bind('<Leave>', leave, add='+'); widget.bind('<ButtonPress>', leave, add='+')
     return widget
 
 # ------------------------------------------------------------------------------------------------- the window
@@ -513,12 +505,20 @@ class App(tk.Tk):
                     tip(ttk.Label(r, text=lab, style='Col.TLabel', width=3), lab.lower()).pack(side='left')
                     self._gate(ttk.Combobox(r, textvariable=var, values=names, width=11, height=len(names), state='readonly')).pack(side='left')
                 self.vars['subs'][v] = (a, b)
+        self.vars['b3'] = []                                   # 2.139: the third voice bank (Extras): one Sub per voice
+        for col in range(5):
+            c = ttk.Frame(f); c.grid(row=3, column=col, sticky='nw', padx=(0, 10), pady=(0, 10))
+            tip(ttk.Label(c, text=f'Bank 3, Voice {col + 1}', style='Voice.TLabel'), 'voice_bank3').pack(anchor='w')
+            var = tk.StringVar(); r = ttk.Frame(c); r.pack(anchor='w', pady=1)
+            tip(ttk.Label(r, text='Sub', style='Col.TLabel', width=3), 'sub').pack(side='left')
+            self._gate(ttk.Combobox(r, textvariable=var, values=names, width=11, height=len(names), state='readonly')).pack(side='left')
+            self.vars['b3'].append(var)
 
     def _sec_bonus(self, page):
         f = ttk.Frame(page); f.pack(fill='x')
         ttk.Label(f, text='Bonus Features', style='Head.TLabel').grid(row=0, column=0, columnspan=4, sticky='w', pady=(0, 6))
         rows = [('modulation', 'Modulation Modes'), ('extras', 'Extras'), ('spoken_names', 'Spoken Mode Names'),
-                ('drum_map', 'Drum MIDI Remap'), ('electric_harp', 'Electric Harp'), ('better_clap', 'Better Clap'),
+                ('drum_map', 'Drum MIDI Remap'), ('linndrum', 'LinnDrum LM-2'),
                 ('kb_transpose', 'Keyboard Transpose'), ('analog_mute', 'Low Chord Volume Mute')]
         for i, (k, t) in enumerate(rows):
             self.vars[k] = tk.IntVar()
@@ -766,12 +766,12 @@ class App(tk.Tk):
     # -------------------------------------------------------------------------- settings
     def _all_vars(self):
         out = [x for ch, pv in self.vars['midi'].values() for x in [ch] + pv] + self.vars['clock']
-        out += [x for s in self.vars['subs'] if s for x in s] + [self.vars[f] for f, _, _ in FLAGS]
+        out += [x for s in self.vars['subs'] if s for x in s] + self.vars['b3'] + [self.vars[f] for f, _, _ in FLAGS]
         return out
 
     def to_dict(self):
         name2n = {v: k for k, v in SUBS.items()}
-        d = {'midi': {}, 'clock': [x.get() for x in self.vars['clock']], 'subs': []}
+        d = {'midi': {}, 'clock': [x.get() for x in self.vars['clock']], 'subs': [], 'b3': [name2n[x.get()] for x in self.vars['b3']]}
         for f, _, _ in FLAGS: d[f] = bool(self.vars[f].get())
         for v, (ch, pv) in self.vars['midi'].items():
             d['midi'][v] = {'channel': None if ch.get() == 'Off' else int(ch.get()), 'presets': [x.get() for x in pv]}
@@ -785,6 +785,7 @@ class App(tk.Tk):
         for x, b in zip(self.vars['clock'], d['clock']): x.set(int(bool(b)))
         for s, e in zip(self.vars['subs'], d['subs']):
             if s and e: s[0].set(SUBS[e['sub']]); s[1].set(SUBS[e['alt']])
+        for x, n in zip(self.vars['b3'], d.get('b3', OP.B3_DEF)): x.set(SUBS[n])
         for f, _, _ in FLAGS: self.vars[f].set(int(bool(d[f])))
 
     def _save_soon(self):
@@ -993,7 +994,7 @@ class App(tk.Tk):
 
     def _checked(self, v):
         if not v: return
-        if v.get('settings') and OP.norm_settings(v['settings']) != OP.norm_settings(self.to_dict()):
+        if v.get('settings') and OP.shown(OP.norm_settings(v['settings'])) != OP.shown(OP.norm_settings(self.to_dict())):
             if messagebox.askyesno('Check/Dump Firmware', P('check_settings', result=v['text'])):
                 d = OP.norm_settings(v['settings']); d['subs'] = [None if s is None else {'sub': s['sub'], 'alt': s['alt']} for s in d['subs']]
                 self.load_dict(d); self.say('The settings of the firmware on the unit are now shown.')

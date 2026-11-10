@@ -51,7 +51,7 @@ The sub sound you get by pressing the lit [VOICE] button again. This setting is 
 **omni 2:** its sub and alt sounds.
 
 [voice_harp]
-**harp:** its sub and alt sounds. Its main sound is set with Electric Harp (Bonus Features).
+**harp:** its sub and alt sounds.
 
 [voice_celesta]
 **celeste:** its sub and alt sounds.
@@ -72,13 +72,15 @@ The sub sound you get by pressing the lit [VOICE] button again. This setting is 
 **vibes:** its sub and alt sounds.
 
 [voice_banjo]
-**banjo:** its sub and alt sounds.
+**banjo:** its sub and alt sounds. With Extras on, its main sound is a new one-sample sound (Bonus Features).
 
-[electric_harp]
-Replaces the main sound of the stock “harp” voice with a custom electric harp / clav sound.
+[voice_bank3]
+**Bank 3 (Extras):** the sub sound of this voice of the third voice bank (hold the yellow [VOICE] button: both its lights come on). Only used with Extras on. This setting is saved.
 
-[better_clap]
-Replaces the stock clap rhythm sound (also played by the Instant OFF plate in keyboard mode) with a "better" clap sound.
+[linndrum]
+Replaces the drum sounds of the 108 rhythm mode with LinnDrum LM-2 samples (rhythm patterns, drum pads, the plates in keyboard mode, the step sequencer). The 84 mode shares the common sounds; its own stay stock.
+In the 108 patterns, the toms play congas, the open hi-hat plays the ride in slow rock, swing, bossanova and waltz, and bossanova swaps the congas.
+**Off:** the stock drum sounds and patterns.
 
 [header]
 **Always On Mods**
@@ -125,6 +127,10 @@ Each mode's settings are saved automatically and are unique to that mode.
 **Jazz Mode:** hold the [KEYBOARD (ON)] button on startup. Changes and adds chord fingerings, and voice leads intelligently when switching chords. This is the only setting NOT remembered between power cycles. Have fun!
 
 **3rd Manual/Auto State:** hold the [Chord Manual/Auto] button and press the [KEYBOARD (ON)] button at any time (both LEDs lit). This third state combines Manual chords with the Auto bass. Do the same again to go back.
+
+**New Banjo and 3rd Voice Bank:** the “banjo” voice plays a new one-sample sound. Hold the [VOICE] left button (yellow) until both its LEDs light: the 5 [VOICE] buttons then play 5 more one-sample voices, each with its own sub sound. Tap the yellow button to go back to the banjo.
+With Extras off, the banjo is the stock one.
+
 
 [spoken_names]
 The unit announces the rhythm mode chosen at power-on ([PATTERN (swing/waltz)]: “84 mode”, [PATTERN (country/bossanova)]: “108 mode”, [PATTERN (slow rock/funk)]: “27 mode”) and the modulation mode selected by tapping the “G♭-7th” chord button. I recommend leaving this on.
